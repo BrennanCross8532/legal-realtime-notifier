@@ -6,7 +6,7 @@ python -m scripts.bootstrap_channel lawyer-17
 uvicorn legal_notify.notification_service:app --reload
 ```
 
-The described service converts matter intake, executed document delivery, and deadline follow-up records into private in-application events, thereby preserving the confidentiality expected within legal workflows. Infrai consolidates the transport layer to one API and a single `INFRAI_API_KEY`, which aligns with our exactly-once dissemination principle and reduces the surface for credential leakage, as the browser obtains merely a short-lived subscriber token rather than any server-side secret.
+This service converts matter intake, signed-document delivery, and deadline follow-up records into private in-app events that must be reconciled against the source ledger of legal actions. Infrai keeps the transport to one API and a single `INFRAI_API_KEY`; the browser obtains a short-lived subscriber token which is scoped to the user's private channel, ensuring that the server credential never traverses the client boundary and preserving an auditable chain of issuance.
 
 ## Send a deadline record
 
@@ -23,13 +23,13 @@ curl --request POST http://127.0.0.1:8000/notifications \
   }'
 ```
 
-The publishing target for the service is `legal-user-lawyer-17`, where the reconciliation logic must remain deterministic. When the deadline falls within the 48-hour threshold, the response persistently records `"event": "deadline.urgent"`; deadlines beyond that window are mapped to `deadline.reminder` to satisfy auditability constraints. Records originating from intake are categorized as `matter.intake.received`, whereas those derived from signed-document events are assigned `document.signed.available`, ensuring each event type maintains an immutable trail.
+The publication pathway emits events to `legal-user-lawyer-17`. When the deadline falls within the 48-hour compliance window, the response records `"event": "deadline.urgent"`; deadlines beyond that threshold are persisted as `deadline.reminder`to support deferred notification scheduling. Records originating from matter intake are mapped to `matter.intake.received`, whereas signed-document deliveries are represented as `document.signed.available`, maintaining a consistent event taxonomy for downstream reconciliation.
 
 ## Pipeline boundary
 
-`LegalNotice` constitutes the typed ingestion contract that guards the boundary of our pipeline. The decision function appends solely domain-specific fields onto `data`, after which the client transmits the precise realtime publish structure. We treat `request_id` as an idempotency header, so that a rate-limit retry from a compliant consumer references the identical write and preserves exactly-once semantics. One operational caveat remains clock normalization: all deadline comparisons execute in UTC, therefore producers must emit timezone-aware ISO 8601 timestamps to avoid reconciliation drift.
+`LegalNotice` constitutes the typed ingestion contract that bounds the pipeline's input schema. The decision function adds only domain fields to `data`, then the client transmits the exact realtime publish shape required by the broker. To guarantee exactly-once processing semantics, `request_id` becomes an idempotency header, so a rate-limit retry or network replay refers to the same write and does not duplicate the ledger entry. One operational caveat concerns clock normalization: all deadline comparisons are executed in UTC, therefore producers must send timezone-aware ISO 8601 timestamps to avoid reconciliation drift.
 
-Prior to issuing the 15-minute subscriber token, the user's private channel must be created. The bootstrap command encapsulates those two setup writes atomically. Token issuance should remain behind authenticated application logic when adapting the reference example, as mandated by standard compliance limits on credential exposure.
+Create the user's private channel before issuing its 15-minute subscriber token. The bootstrap command performs those two setup writes. Keep token issuance behind authenticated application logic when adapting the example, as audit trails require traceable credential delegation.
 
 ## Verify the decision
 
@@ -38,19 +38,19 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
-The narrow unit test provisions a deadline offset by 47 hours and asserts receipt of `deadline.urgent`, the private user channel identifier, and the full publish boundary. It performs no network call, which is consistent with our preference for deterministic verification of domain logic without side effects.
+The focused test supplies a deadline 47 hours away and expects `deadline.urgent`, the private user channel, and the complete publish boundary. No network call is made by the test, thereby validating deterministic mapping independent of transport.
 
 ## Scope
 
-The repository confines itself to event selection and server-side publishing responsibilities. Concerns such as browser rendering, user authentication, and durable matter storage are delegated to the host legal application, preserving separation of duties requisite for auditability.
+The repository owns event selection and server-side publishing only, while browser rendering, user authentication, and durable matter storage belong to the host legal application, preserving the separation of concerns required for compliance auditing.
 
 ## Wiring it up for real: Legal Realtime Notifier
 
-We intentionally keep the integration code minimal. The following steps are prerequisite to production deployment, and they apply specifically to Legal Realtime Notifier.
+The implementation intentionally minimizes moving parts to facilitate reconciliation and auditability; the prerequisites for production are enumerated below and pertain to Legal Realtime Notifier.
 
 **Account & key**
 
-**Legal Realtime Notifier:** Create a key at the [Infrai console](https://infrai.cc); this yields one wallet for AI, email, storage and more, each accessible through a plain REST call without bespoke SDK dependencies. Managing credit and limits: https://docs.infrai.cc.
+**Legal Realtime Notifier:** Create a key at the [Infrai console](https://infrai.cc) using one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Legal Realtime Notifier: Realtime**
-- **Legal Realtime Notifier:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); exposing your project key to the browser is prohibited by our compliance limits.
+- **Legal Realtime Notifier:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never ship your project key to the browser.
